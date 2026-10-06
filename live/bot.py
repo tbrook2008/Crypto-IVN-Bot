@@ -5,6 +5,10 @@ import os
 import sys
 import pandas as pd
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables (API Keys)
+load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.ict_logic import detect_ict_setup_fast
@@ -27,29 +31,21 @@ def calculate_position_size(equity, risk_pct, entry_price, sl_price, max_leverag
         
     return size
 
-async def fetch_and_analyze(exchange, symbol, params, config):
+async def fetch_and_analyze(exchange, symbol, params, config, portfolio_state):
     try:
-        # Fetch OHLCV data
         timeframe = params['timeframe']
-        limit = params['lookback'] * 2  # Buffer for ATR calculation
+        limit = params['lookback'] * 2 
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         
-        if not ohlcv:
-            return
+        if not ohlcv: return
             
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # Calculate ATR
         prev = df['close'].shift(1)
         tr = pd.concat([df['high']-df['low'], (df['high']-prev).abs(), (df['low']-prev).abs()], axis=1).max(axis=1)
         df['atr'] = tr.rolling(14).mean().bfill()
-        
         bars = df.to_dict('records')
-        
-        # We only pass the required lookback window to the detection engine
         window = bars[-params['lookback']:]
         
-        # Detect setup using the exactly matched core engine logic
         setup = detect_ict_setup_fast(window, config['ict_parameters'], htf_bias=None)
         
         if setup:
@@ -64,45 +60,96 @@ async def fetch_and_analyze(exchange, symbol, params, config):
                 sl = current_price + risk_points
                 tp = current_price - (risk_points * rr)
                 
-            # Fetch balance to calculate size dynamically
-            # balance = await exchange.fetch_balance()
-            # equity = balance['USDT']['total']
-            equity = 1000.0  # Placeholder for paper trading log
-            
-            size = calculate_position_size(equity, config['risk_management']['risk_per_trade_pct'], 
-                                           current_price, sl, config['risk_management']['max_leverage'])
-            
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔥 SETUP DETECTED: {symbol} | {setup['side'].upper()} | Entry: {current_price} | SL: {sl} | TP: {tp} | Size: {size:.4f}")
-            
-            # --- LIVE EXECUTION LOGIC GOES HERE ---
-            # await exchange.create_order(symbol, 'market', setup['side'], size)
-            # await exchange.create_order(symbol, 'limit', 'stop_loss', size, sl, params={'stopPrice': sl})
-            # await exchange.create_order(symbol, 'limit', 'take_profit', size, tp, params={'stopPrice': tp})
-            
+            # Global Portfolio Constraints Check
+            async with portfolio_state['lock']:
+                if portfolio_state['open_trades'] >= config['global_portfolio_constraints']['max_concurrent_trades']:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SKIP {symbol}: Max concurrent trades reached.")
+                    return
+                
+                # Fetch live balance for sizing
+                balance = await exchange.fetch_balance()
+                equity = balance['USDT']['total'] if 'USDT' in balance else 1000.0
+                
+                size = calculate_position_size(equity, config['risk_management']['risk_per_trade_pct'], 
+                                               current_price, sl, config['global_portfolio_constraints']['max_total_leverage'])
+                
+                if size > 0:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔥 EXECUTING: {symbol} | {setup['side'].upper()} | Size: {size:.4f}")
+                    
+                    try:
+                        # 1. Market Entry
+                        order = await exchange.create_order(symbol, 'market', setup['side'], size)
+                        
+                        # 2. Place Stop Loss (using inverse side)
+                        exit_side = 'sell' if setup['side'] == 'buy' else 'buy'
+                        
+                        # CCXT Unified Bracket Order syntax (varies slightly by exchange, mapped for Bybit/Binance Perps)
+                        await exchange.create_order(symbol, 'stop', exit_side, size, sl, params={'stopPrice': sl, 'reduceOnly': True})
+                        
+                        # 3. Place Take Profit
+                        await exchange.create_order(symbol, 'limit', exit_side, size, tp, params={'reduceOnly': True})
+                        
+                        # Register trade in portfolio state
+                        portfolio_state['open_trades'] += 1
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ ORDERS PLACED SUCCESSFULLY FOR {symbol}")
+                        
+                    except Exception as order_err:
+                        print(f"Failed to place orders for {symbol}: {order_err}")
+
     except Exception as e:
         print(f"Error processing {symbol}: {e}")
 
 async def main():
     config = load_config()
     print("="*60)
-    print("INITIALIZING CRYPTO-IVN-BOT LIVE ENGINE")
+    print("INITIALIZING CRYPTO-IVN-BOT LIVE ENGINE (TESTNET)")
     print("Loaded Verified Assets:", list(config['assets'].keys()))
     print("="*60)
     
-    # Initialize exchange (using Binance as default, swap to user's via .env later)
-    exchange = ccxt.binance({
+    api_key = os.getenv("EXCHANGE_API_KEY")
+    api_secret = os.getenv("EXCHANGE_API_SECRET")
+    
+    if not api_key or not api_secret:
+        print("CRITICAL ERROR: EXCHANGE_API_KEY or EXCHANGE_API_SECRET missing in .env file.")
+        sys.exit(1)
+    
+    # Initialize exchange (Bybit Testnet by default for Perps shorting)
+    exchange = ccxt.bybit({
+        'apiKey': api_key,
+        'secret': api_secret,
         'enableRateLimit': True,
+        'options': {'defaultType': 'swap'} # Important: 'swap' means Perpetual Futures
     })
     
+    # Force Testnet Mode
+    exchange.set_sandbox_mode(True)
+    
+    portfolio_state = {
+        'open_trades': 0, # In a full prod bot, this would actively poll exchange.fetch_positions()
+        'lock': asyncio.Lock()
+    }
+    
     while True:
+        # In production, we actively sync open positions with the exchange
+        try:
+            positions = await exchange.fetch_positions()
+            active_positions = [p for p in positions if float(p['info'].get('size', 0)) > 0]
+            portfolio_state['open_trades'] = len(active_positions)
+        except Exception as e:
+            print(f"Could not sync positions: {e}")
+            
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Active Positions: {portfolio_state['open_trades']}/{config['global_portfolio_constraints']['max_concurrent_trades']}")
+        
         tasks = []
         for symbol, params in config['assets'].items():
-            tasks.append(fetch_and_analyze(exchange, symbol, params, config))
+            # Convert spot symbol to perp symbol depending on exchange (e.g. BTC/USDT:USDT for CCXT unified)
+            perp_symbol = symbol + ":USDT" 
+            tasks.append(fetch_and_analyze(exchange, perp_symbol, params, config, portfolio_state))
             
         await asyncio.gather(*tasks)
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Scan complete. Sleeping for 5 minutes...")
-        await asyncio.sleep(300)  # Scan every 5 minutes (since lowest TF is 2H)
+        await asyncio.sleep(300) 
 
 if __name__ == "__main__":
     try:
