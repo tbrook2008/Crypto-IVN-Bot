@@ -1,1 +1,20 @@
-{"version": "1.0.0"}
+{
+    "version": "1.0.0",
+    "risk_management": {
+        "risk_per_trade_pct": 0.01,
+        "fee_rate": 0.001
+    },
+    "ict_parameters": {
+        "LOOKBACK_BARS": 20,
+        "RR_RATIO": 3.0,
+        "MIN_RISK_ATR_MULTIPLIER": 0.5,
+        "MAX_RISK_ATR_MULTIPLIER": 5.0,
+        "MIN_FVG_ATR_MULTIPLIER": 0.5,
+        "TIME_WINDOW": {
+            "start_h": 0,
+            "start_m": 0,
+            "end_h": 23,
+            "end_m": 59
+        }
+    }
+}
