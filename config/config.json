@@ -1,8 +1,13 @@
 {
-    "version": "1.0.1",
+    "version": "1.0.2",
+    "global_portfolio_constraints": {
+        "max_concurrent_trades": 3,
+        "max_portfolio_risk_pct": 0.03,
+        "max_total_leverage": 5.0
+    },
     "risk_management": {
         "risk_per_trade_pct": 0.01,
-        "max_leverage": 5
+        "fee_rate": 0.001
     },
     "ict_parameters": {
         "MIN_RISK_ATR_MULTIPLIER": 0.5,
