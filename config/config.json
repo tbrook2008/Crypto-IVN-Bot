@@ -1,20 +1,23 @@
 {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "risk_management": {
         "risk_per_trade_pct": 0.01,
-        "fee_rate": 0.001
+        "max_leverage": 5
     },
     "ict_parameters": {
-        "LOOKBACK_BARS": 20,
-        "RR_RATIO": 3.0,
         "MIN_RISK_ATR_MULTIPLIER": 0.5,
         "MAX_RISK_ATR_MULTIPLIER": 5.0,
-        "MIN_FVG_ATR_MULTIPLIER": 0.5,
-        "TIME_WINDOW": {
-            "start_h": 0,
-            "start_m": 0,
-            "end_h": 23,
-            "end_m": 59
-        }
+        "MIN_FVG_ATR_MULTIPLIER": 0.5
+    },
+    "assets": {
+        "SOL/USDT": {"timeframe": "4h", "rr": 1.5, "lookback": 20},
+        "BNB/USDT": {"timeframe": "4h", "rr": 2.0, "lookback": 40},
+        "DOGE/USDT": {"timeframe": "4h", "rr": 3.0, "lookback": 20},
+        "LTC/USDT": {"timeframe": "2h", "rr": 2.0, "lookback": 30},
+        "XRP/USDT": {"timeframe": "2h", "rr": 1.5, "lookback": 30},
+        "ETH/USDT": {"timeframe": "4h", "rr": 3.0, "lookback": 40},
+        "LINK/USDT": {"timeframe": "2h", "rr": 1.0, "lookback": 20},
+        "BTC/USDT": {"timeframe": "2h", "rr": 1.5, "lookback": 30},
+        "AVAX/USDT": {"timeframe": "4h", "rr": 3.0, "lookback": 20}
     }
 }
